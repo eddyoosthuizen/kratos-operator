@@ -12,6 +12,7 @@ from os.path import join
 from secrets import token_hex
 from typing import Any, Optional
 
+from charmlibs.interfaces.security_otlp import SecurityOtlpRequirer
 from charms.certificate_transfer_interface.v1.certificate_transfer import (
     CertificatesAvailableEvent,
     CertificatesRemovedEvent,
@@ -130,8 +131,10 @@ from constants import (
     PROMETHEUS_SCRAPE_INTEGRATION_NAME,
     PUBLIC_ROUTE_INTEGRATION_NAME,
     REGISTRATION_WEBHOOK_INTEGRATION_NAME,
+    SECURITY_OTLP_INTEGRATION_NAME,
     TRACING_INTEGRATION_NAME,
     WORKLOAD_CONTAINER,
+    WORKLOAD_SERVICE,
 )
 from exceptions import (
     ClientRequestError,
@@ -156,6 +159,7 @@ from integrations import (
     SmtpData,
     TLSCertificates,
     TracingData,
+    configure_security_otlp_log_forwarding,
 )
 from secret import Secrets
 from services import PebbleService, WorkloadService
@@ -268,6 +272,13 @@ class KratosCharm(CharmBase):
         )
 
         self._log_forwarder = LogForwarder(self, relation_name=LOGGING_INTEGRATION_NAME)
+
+        # security-otlp: a separate, SecOps-owned log path, bypassing COS. Pebble only
+        # speaks OTLP/HTTP for log forwarding (no gRPC), so only "http" is requested.
+        self.security_otlp_requirer = SecurityOtlpRequirer(
+            self, relation_name=SECURITY_OTLP_INTEGRATION_NAME, protocols=["http"]
+        )
+
         self.tracing = TracingEndpointRequirer(
             self, relation_name=TRACING_INTEGRATION_NAME, protocols=["otlp_http"]
         )
@@ -492,6 +503,10 @@ class KratosCharm(CharmBase):
             self._configure_courier()
         except PebbleServiceError as e:
             logger.error("Failed to start the service, please check the container logs: %s", e)
+
+        configure_security_otlp_log_forwarding(
+            self._container, self.security_otlp_requirer, WORKLOAD_SERVICE
+        )
 
     def _configure_courier(self) -> None:
         """Ensures the courier runs as a singleton on the leader."""

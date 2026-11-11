@@ -47,6 +47,13 @@ requires:
   logging:
     interface: loki_push_api
     optional: true
+  send-security-otlp:
+    interface: security_otlp
+    optional: true
+    description: |
+      Send security-relevant logs directly to a SecOps-owned log-aggregator-k8s instance,
+      bypassing the general COS/otlp pipeline. Unbounded -- a source charm may relate to
+      more than one log-aggregator-k8s instance at once.
   tracing:
     interface: tracing
     limit: 1
@@ -360,5 +367,10 @@ parts:
   charm:
     plugin: uv
     source: .
+    # git is required in the build container because charmlibs-interfaces-security-otlp
+    # is declared as a git+https dependency; uv shells out to git to fetch it. Can be
+    # dropped once that dependency moves to a published PyPI version pin.
+    build-packages:
+      - git
     build-snaps:
       - astral-uv

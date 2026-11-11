@@ -192,6 +192,14 @@ wheels = [
 ]
 
 [[package]]
+name = "charmlibs-interfaces-security-otlp"
+version = "0.1.0"
+source = { git = "https://github.com/eddyoosthuizen/charmlibs?subdirectory=interfaces%2Fsecurity-otlp&rev=security-otlp#8292086a3063a34875dd6c769b57a496a2772bc5" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[[package]]
 name = "charset-normalizer"
 version = "3.5.2"
 source = { registry = "https://pypi.org/simple" }
@@ -978,6 +986,7 @@ version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "bcrypt" },
+    { name = "charmlibs-interfaces-security-otlp" },
     { name = "cosl" },
     { name = "dacite" },
     { name = "jinja2" },
@@ -1038,6 +1047,7 @@ unit = [
 [package.metadata]
 requires-dist = [
     { name = "bcrypt", specifier = "==5.0.0" },
+    { name = "charmlibs-interfaces-security-otlp", git = "https://github.com/eddyoosthuizen/charmlibs?subdirectory=interfaces%2Fsecurity-otlp&rev=security-otlp" },
     { name = "cosl", specifier = "==1.11.3" },
     { name = "dacite" },
     { name = "jinja2", specifier = "==3.1.6" },
