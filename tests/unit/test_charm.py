@@ -14,6 +14,7 @@ from constants import (
     KRATOS_ADMIN_PORT,
     KRATOS_PUBLIC_PORT,
     PEER_INTEGRATION_NAME,
+    SECURITY_OTLP_INTEGRATION_NAME,
     WORKLOAD_CONTAINER,
 )
 
@@ -777,6 +778,37 @@ class TestTracingEndpointRemovedEvent:
 
         with patch("builtins.open", mock_open(read_data=ingress_template)):
             ctx.run(ctx.on.relation_broken(tracing_integration), state_in)
+
+        mocked_charm_holistic_handler.assert_called_once()
+
+
+class TestSecurityOtlpRelationChangedEvent:
+    def test_when_event_emitted(self, mocked_charm_holistic_handler: MagicMock) -> None:
+        ctx = testing.Context(KratosCharm)
+        security_otlp_integration = testing.Relation(
+            SECURITY_OTLP_INTEGRATION_NAME,
+            remote_app_data={
+                "endpoints": json.dumps([
+                    {"protocol": "http", "endpoint": "https://collector.example:4319"}
+                ])
+            },
+        )
+        container = testing.Container(WORKLOAD_CONTAINER, can_connect=True)
+        state_in = testing.State(containers={container}, relations=[security_otlp_integration])
+
+        ctx.run(ctx.on.relation_changed(security_otlp_integration), state_in)
+
+        mocked_charm_holistic_handler.assert_called_once()
+
+
+class TestSecurityOtlpRelationBrokenEvent:
+    def test_when_event_emitted(self, mocked_charm_holistic_handler: MagicMock) -> None:
+        ctx = testing.Context(KratosCharm)
+        security_otlp_integration = testing.Relation(SECURITY_OTLP_INTEGRATION_NAME)
+        container = testing.Container(WORKLOAD_CONTAINER, can_connect=True)
+        state_in = testing.State(containers={container}, relations=[security_otlp_integration])
+
+        ctx.run(ctx.on.relation_broken(security_otlp_integration), state_in)
 
         mocked_charm_holistic_handler.assert_called_once()
 

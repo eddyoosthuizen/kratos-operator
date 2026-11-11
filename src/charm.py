@@ -417,6 +417,16 @@ class KratosCharm(CharmBase):
             self._on_certificate_changed,
         )
 
+        # security-otlp
+        self.framework.observe(
+            self.on[SECURITY_OTLP_INTEGRATION_NAME].relation_changed,
+            self._on_security_otlp_changed,
+        )
+        self.framework.observe(
+            self.on[SECURITY_OTLP_INTEGRATION_NAME].relation_broken,
+            self._on_security_otlp_changed,
+        )
+
         # tracing
         self.framework.observe(self.tracing.on.endpoint_changed, self._on_config_changed)
         self.framework.observe(self.tracing.on.endpoint_removed, self._on_config_changed)
@@ -859,6 +869,9 @@ class KratosCharm(CharmBase):
         self,
         event: CertificatesAvailableEvent | CertificatesRemovedEvent,
     ) -> None:
+        self._holistic_handler(event)
+
+    def _on_security_otlp_changed(self, event: RelationEvent) -> None:
         self._holistic_handler(event)
 
     def _on_pebble_check_failed(self, event: PebbleCheckFailedEvent) -> None:
