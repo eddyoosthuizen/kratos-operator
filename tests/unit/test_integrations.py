@@ -6,6 +6,7 @@ from dataclasses import asdict
 from unittest.mock import MagicMock, create_autospec, mock_open, patch
 
 import pytest
+from charmlibs.interfaces.security_otlp import SecurityOtlpEndpoint
 from charms.certificate_transfer_interface.v1.certificate_transfer import (
     CertificateTransferRequires,
 )
@@ -30,10 +31,18 @@ from charms.smtp_integrator.v0.smtp import (
 )
 from charms.tempo_coordinator_k8s.v0.tracing import TracingEndpointRequirer
 from charms.traefik_k8s.v0.traefik_route import TraefikRouteRequirer
+from ops.model import Container
 from pytest_mock import MockerFixture
 from yarl import URL
 
-from constants import KRATOS_ADMIN_PORT, KRATOS_PUBLIC_PORT, POSTGRESQL_DSN_TEMPLATE
+from constants import (
+    KRATOS_ADMIN_PORT,
+    KRATOS_PUBLIC_PORT,
+    POSTGRESQL_DSN_TEMPLATE,
+    SECURITY_OTLP_FILTER_BINARY_PATH,
+    SECURITY_OTLP_FILTER_SERVICE,
+    WORKLOAD_SERVICE,
+)
 from integrations import (
     DatabaseConfig,
     ExternalIdpIntegratorData,
@@ -47,6 +56,7 @@ from integrations import (
     SmtpData,
     TLSCertificates,
     TracingData,
+    configure_security_otlp_log_forwarding,
 )
 
 
@@ -738,3 +748,94 @@ class TestTLSCertificates:
 
         mocked_subprocess_run.assert_not_called()
         assert certificates.ca_bundle == all_certs
+
+
+class TestSecurityOtlpLogForwarding:
+    @staticmethod
+    def container_with_log_targets(log_targets: dict) -> MagicMock:
+        container = create_autospec(Container, instance=True)
+        container.get_plan.return_value.to_dict.return_value = {"log-targets": log_targets}
+        return container
+
+    @staticmethod
+    def requirer_with(endpoints: dict) -> MagicMock:
+        requirer = MagicMock()
+        requirer.endpoints = endpoints
+        return requirer
+
+    @staticmethod
+    def filter_binary() -> MagicMock:
+        binary = MagicMock()
+        binary.read_bytes.return_value = b"filter binary"
+        return binary
+
+    def test_one_log_target_per_related_collector(self) -> None:
+        container = self.container_with_log_targets({})
+        requirer = self.requirer_with({
+            3: SecurityOtlpEndpoint(protocol="http", endpoint="https://a.example:4319"),
+            7: SecurityOtlpEndpoint(protocol="http", endpoint="https://b.example:4319"),
+        })
+
+        with patch("integrations.SECURITY_OTLP_FILTER_SOURCE_PATH", new=self.filter_binary()):
+            configure_security_otlp_log_forwarding(container, requirer, WORKLOAD_SERVICE)
+
+        name, layer = container.add_layer.call_args.args
+        log_targets = layer.to_dict()["log-targets"]
+        assert name == "security-otlp-log-forwarding"
+        assert container.add_layer.call_args.kwargs == {"combine": True}
+        assert set(log_targets) == {"security-otlp-3", "security-otlp-7"}
+        assert log_targets["security-otlp-3"]["location"] == "https://a.example:4319"
+        assert log_targets["security-otlp-3"]["type"] == "opentelemetry"
+        assert log_targets["security-otlp-3"]["services"] == [SECURITY_OTLP_FILTER_SERVICE]
+        container.replan.assert_called_once()
+
+    def test_runs_the_filter_service_against_the_workload(self) -> None:
+        container = self.container_with_log_targets({})
+        requirer = self.requirer_with({
+            3: SecurityOtlpEndpoint(protocol="http", endpoint="https://a.example:4319")
+        })
+
+        with patch("integrations.SECURITY_OTLP_FILTER_SOURCE_PATH", new=self.filter_binary()):
+            configure_security_otlp_log_forwarding(container, requirer, WORKLOAD_SERVICE)
+
+        container.push.assert_called_once_with(
+            str(SECURITY_OTLP_FILTER_BINARY_PATH),
+            b"filter binary",
+            permissions=0o755,
+            make_dirs=True,
+        )
+        _, layer = container.add_layer.call_args.args
+        filter_service = layer.to_dict()["services"][SECURITY_OTLP_FILTER_SERVICE]
+        assert filter_service["command"].startswith(str(SECURITY_OTLP_FILTER_BINARY_PATH))
+        assert f"-service {WORKLOAD_SERVICE}" in filter_service["command"]
+        assert filter_service["startup"] == "enabled"
+
+    def test_disables_targets_of_collectors_no_longer_related(self) -> None:
+        container = self.container_with_log_targets({
+            "security-otlp-3": {"type": "opentelemetry", "location": "https://a.example:4319"},
+            "kratos-loki": {"type": "loki", "location": "http://loki:3100"},
+        })
+        requirer = self.requirer_with({
+            5: SecurityOtlpEndpoint(protocol="http", endpoint="https://c.example:4319")
+        })
+
+        with patch("integrations.SECURITY_OTLP_FILTER_SOURCE_PATH", new=self.filter_binary()):
+            configure_security_otlp_log_forwarding(container, requirer, WORKLOAD_SERVICE)
+
+        _, layer = container.add_layer.call_args.args
+        log_targets = layer.to_dict()["log-targets"]
+        assert set(log_targets) == {"security-otlp-3", "security-otlp-5"}
+        assert log_targets["security-otlp-3"]["services"] == [f"-{SECURITY_OTLP_FILTER_SERVICE}"]
+        assert log_targets["security-otlp-5"]["services"] == [SECURITY_OTLP_FILTER_SERVICE]
+
+    def test_does_nothing_without_related_or_stale_collectors(self) -> None:
+        container = self.container_with_log_targets({
+            "kratos-loki": {"type": "loki", "location": "http://loki:3100"}
+        })
+        requirer = self.requirer_with({})
+
+        configure_security_otlp_log_forwarding(container, requirer, WORKLOAD_SERVICE)
+
+        container.push.assert_not_called()
+        container.add_layer.assert_not_called()
+        container.replan.assert_not_called()
