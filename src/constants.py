@@ -45,6 +45,7 @@ LOGGING_INTEGRATION_NAME = "logging"
 GRAFANA_DASHBOARD_INTEGRATION_NAME = "grafana-dashboard"
 TRACING_INTEGRATION_NAME = "tracing"
 PUBLIC_ROUTE_INTEGRATION_NAME = "public-route"
+SECURITY_OTLP_INTEGRATION_NAME = "send-security-otlp"
 
 # Action constants
 ALLOWED_MFA_CREDENTIAL_TYPES = ("totp", "lookup_secret", "webauthn")
@@ -53,3 +54,17 @@ ALLOWED_MFA_CREDENTIAL_TYPES = ("totp", "lookup_secret", "webauthn")
 COOKIE_SECRET_LABEL = "cookie_secret"
 COOKIE_SECRET_CONTENT_KEY = "cookiesecret"
 SECRET_ID_KEY = "secret-id"
+
+# TEST SCAFFOLDING, not production: how the security-otlp filter binary gets into the
+# workload container. The binary is checked into this charm's own src/ (built by
+# ../poc-log-filtering/, CGO_ENABLED=0 static) and pushed from there -- a stopgap for
+# the still-open packaging decision (charm resource vs. a charmcraft.yaml build part),
+# not the production delivery mechanism. See STATUS.md Next-steps item 4.
+SECURITY_OTLP_FILTER_SERVICE = "security-otlp-filter"
+SECURITY_OTLP_FILTER_SOURCE_PATH = Path(__file__).parent / "security-otlp-filter"
+SECURITY_OTLP_FILTER_BINARY_PATH = Path("/tmp/security-otlp-filter")
+# hybrid: the one of poc-log-filtering's policies whose live-confirmed behavior is
+# closest to "forward everything except confirmed noise" -- the least surprising
+# default while the actual filtering policy is still a SecOps decision (see
+# ../poc-log-filtering/METHODOLOGIES.md).
+SECURITY_OTLP_FILTER_POLICY = "hybrid"

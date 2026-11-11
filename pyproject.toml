@@ -10,6 +10,9 @@ license = {file = "LICENSE"}
 requires-python = ">=3.10"
 dependencies = [
     "bcrypt==5.0.0",
+    # TODO: switch to a published "charmlibs-interfaces-security-otlp" version pin once the
+    # security-otlp interface merges into canonical/charmlibs and is released to PyPI.
+    "charmlibs-interfaces-security-otlp @ git+https://github.com/eddyoosthuizen/charmlibs@security-otlp#subdirectory=interfaces/security-otlp",
     "cosl==1.10.3",
     "ops==3.8.2",
     "dacite",
