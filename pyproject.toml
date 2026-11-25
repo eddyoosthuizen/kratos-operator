@@ -21,6 +21,8 @@ dependencies = [
     "pyyaml==6.0.4",
     "requests",
     "yarl",
+    # TODO: a PyPI version once released.
+    "charmlibs-interfaces-log-filters @ git+https://github.com/eddyoosthuizen/charmlibs.git@log-filters#subdirectory=interfaces/log_filters",
 ]
 
 [dependency-groups]

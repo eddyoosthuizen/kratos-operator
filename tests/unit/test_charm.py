@@ -2,7 +2,7 @@
 # See LICENSE file for licensing details.
 
 import json
-from unittest.mock import MagicMock, PropertyMock, mock_open, patch
+from unittest.mock import ANY, MagicMock, PropertyMock, mock_open, patch
 
 import pytest
 from ops import testing
@@ -13,7 +13,9 @@ from constants import (
     COURIER_SERVICE,
     KRATOS_ADMIN_PORT,
     KRATOS_PUBLIC_PORT,
+    LOG_FILTERS_DROP,
     PEER_INTEGRATION_NAME,
+    SEND_LOG_FILTERS_INTEGRATION_NAME,
     WORKLOAD_CONTAINER,
 )
 
@@ -124,6 +126,33 @@ class TestPebbleReadyEvent:
         assert mocked_workload_service_version.call_args[0] == (
             mocked_workload_service_version.return_value,
         )
+
+
+class TestLogFiltersRelationChangedEvent:
+    def test_when_event_emitted(self, mocked_charm_holistic_handler: MagicMock) -> None:
+        ctx = testing.Context(KratosCharm)
+        container = testing.Container(WORKLOAD_CONTAINER, can_connect=False)
+        relation = testing.Relation(SEND_LOG_FILTERS_INTEGRATION_NAME)
+        state_in = testing.State(leader=True, containers={container}, relations=[relation])
+
+        ctx.run(ctx.on.relation_changed(relation), state_in)
+
+        mocked_charm_holistic_handler.assert_called_once()
+
+
+class TestHolisticHandlerLogFilters:
+    def test_when_the_charm_is_not_ready(self) -> None:
+        ctx = testing.Context(KratosCharm)
+        container = testing.Container(WORKLOAD_CONTAINER, can_connect=False)
+        state_in = testing.State(leader=True, containers={container})
+
+        with patch("charm.LogFiltersRequirer") as mocked_requirer:
+            ctx.run(ctx.on.update_status(), state_in)
+
+        mocked_requirer.assert_called_once_with(
+            ANY, SEND_LOG_FILTERS_INTEGRATION_NAME, ottl_drop=LOG_FILTERS_DROP
+        )
+        mocked_requirer.return_value.publish.assert_called_once()
 
 
 class TestUpgradeCharmEvent:

@@ -42,6 +42,7 @@ LOGIN_UI_INTEGRATION_NAME = "ui-endpoint-info"
 KRATOS_INFO_INTEGRATION_NAME = "kratos-info"
 PROMETHEUS_SCRAPE_INTEGRATION_NAME = "metrics-endpoint"
 LOGGING_INTEGRATION_NAME = "logging"
+SEND_LOG_FILTERS_INTEGRATION_NAME = "send-log-filters"
 GRAFANA_DASHBOARD_INTEGRATION_NAME = "grafana-dashboard"
 TRACING_INTEGRATION_NAME = "tracing"
 PUBLIC_ROUTE_INTEGRATION_NAME = "public-route"
@@ -53,3 +54,22 @@ ALLOWED_MFA_CREDENTIAL_TYPES = ("totp", "lookup_secret", "webauthn")
 COOKIE_SECRET_LABEL = "cookie_secret"
 COOKIE_SECRET_CONTENT_KEY = "cookiesecret"
 SECRET_ID_KEY = "secret-id"
+
+
+# Health checks that only read and did not fail carry no security signal. Writes and failures on
+# the same paths are kept.
+_HEALTH_CHECK_CONDITION = (
+    'attributes["http_request.path"] != nil'
+    ' and HasPrefix(attributes["http_request.path"], "{prefix}")'
+    ' and not (attributes["http_request.method"] == "POST"'
+    ' or attributes["http_request.method"] == "PUT"'
+    ' or attributes["http_request.method"] == "PATCH"'
+    ' or attributes["http_request.method"] == "DELETE")'
+    ' and not ((attributes["http_response.status"] != nil'
+    ' and attributes["http_response.status"] >= 400)'
+    ' or (attributes["http_response.status_code"] != nil'
+    ' and attributes["http_response.status_code"] >= 400))'
+)
+LOG_FILTERS_DROP = tuple(
+    _HEALTH_CHECK_CONDITION.format(prefix=prefix) for prefix in ("/admin/health",)
+)

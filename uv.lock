@@ -192,6 +192,15 @@ wheels = [
 ]
 
 [[package]]
+name = "charmlibs-interfaces-log-filters"
+version = "0.1.0.dev0"
+source = { git = "https://github.com/eddyoosthuizen/charmlibs.git?subdirectory=interfaces%2Flog_filters&rev=log-filters#29c926df5d588e24a51a4eae5925d50b519cf542" }
+dependencies = [
+    { name = "cosl" },
+    { name = "pydantic" },
+]
+
+[[package]]
 name = "charset-normalizer"
 version = "3.5.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1000,6 +1009,7 @@ version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "bcrypt" },
+    { name = "charmlibs-interfaces-log-filters" },
     { name = "cosl" },
     { name = "dacite" },
     { name = "jinja2" },
@@ -1060,6 +1070,7 @@ unit = [
 [package.metadata]
 requires-dist = [
     { name = "bcrypt", specifier = "==5.0.0" },
+    { name = "charmlibs-interfaces-log-filters", git = "https://github.com/eddyoosthuizen/charmlibs.git?subdirectory=interfaces%2Flog_filters&rev=log-filters" },
     { name = "cosl", specifier = "==1.11.3" },
     { name = "dacite" },
     { name = "jinja2", specifier = "==3.1.6" },

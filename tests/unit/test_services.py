@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from ops import ModelError
-from ops.pebble import CheckStatus, ServiceStatus
+from ops.pebble import CheckStatus, Layer, ServiceStatus
 from pytest_mock import MockerFixture
 from scenario import CheckInfo
 
@@ -21,7 +21,7 @@ from constants import (
 )
 from env_vars import DEFAULT_CONTAINER_ENV, EnvVarConvertible
 from exceptions import PebbleServiceError
-from services import PebbleService, WorkloadService
+from services import PebbleService, WorkloadService, plan_contains_layer
 
 
 class TestWorkloadService:
@@ -156,55 +156,52 @@ class TestPebbleService:
         return PebbleService(mocked_unit)
 
     @pytest.fixture
+    def layer(self) -> dict:
+        return {"services": {WORKLOAD_SERVICE: {"override": "replace", "command": "kratos serve"}}}
+
+    @pytest.fixture
     def mocked_config_file(self, mocker: MockerFixture) -> MagicMock:
         mocked = mocker.patch("charm.ConfigFile.from_workload_container")
         mocked.return_value = ConfigFile("config_file")
         return mocked
 
-    @patch("ops.pebble.Layer")
     def test_plan_when_config_files_mismatch(
         self,
-        mocked_layer: MagicMock,
+        layer: dict,
         mocked_config_file: MagicMock,
         mocked_container: MagicMock,
         pebble_service: PebbleService,
     ) -> None:
-        pebble_service.plan(mocked_layer, config_file=ConfigFile("new_config_file"))
+        pebble_service.plan(layer, config_file=ConfigFile("new_config_file"))
 
         assert pebble_service.config_changed is True
 
-        mocked_container.add_layer.assert_called_once_with(
-            WORKLOAD_SERVICE, mocked_layer, combine=True
-        )
+        mocked_container.add_layer.assert_called_once_with(WORKLOAD_SERVICE, layer, combine=True)
         mocked_container.push.assert_called_once_with(
             CONFIG_FILE_PATH, "new_config_file", make_dirs=True
         )
         mocked_container.restart.assert_called_once_with(WORKLOAD_SERVICE)
         mocked_container.replan.assert_not_called()
 
-    @patch("ops.pebble.Layer")
     def test_plan_when_config_files_match(
         self,
-        mocked_layer: MagicMock,
+        layer: dict,
         mocked_config_file: MagicMock,
         mocked_container: MagicMock,
         pebble_service: PebbleService,
     ) -> None:
-        pebble_service.plan(mocked_layer, config_file=ConfigFile("config_file"))
+        pebble_service.plan(layer, config_file=ConfigFile("config_file"))
 
         assert pebble_service.config_changed is False
 
-        mocked_container.add_layer.assert_called_once_with(
-            WORKLOAD_SERVICE, mocked_layer, combine=True
-        )
+        mocked_container.add_layer.assert_called_once_with(WORKLOAD_SERVICE, layer, combine=True)
         mocked_container.push.assert_not_called()
         mocked_container.restart.assert_not_called()
         mocked_container.replan.assert_called_once()
 
-    @patch("ops.pebble.Layer")
     def test_plan_failure(
         self,
-        mocked_layer: MagicMock,
+        layer: dict,
         mocked_config_file: MagicMock,
         mocked_container: MagicMock,
         pebble_service: PebbleService,
@@ -213,19 +210,73 @@ class TestPebbleService:
             patch.object(mocked_container, "replan", side_effect=Exception("plan_error")),
             pytest.raises(PebbleServiceError) as exc_info,
         ):
-            pebble_service.plan(mocked_layer, config_file=ConfigFile("config_file"))
+            pebble_service.plan(layer, config_file=ConfigFile("config_file"))
 
-        mocked_container.add_layer.assert_called_once_with(
-            WORKLOAD_SERVICE, mocked_layer, combine=True
-        )
+        mocked_container.add_layer.assert_called_once_with(WORKLOAD_SERVICE, layer, combine=True)
         assert "Pebble failed to restart the workload service" in str(exc_info.value)
         assert "plan_error" in str(exc_info.value)
 
-    def test_restart_success(self, mocked_container: MagicMock, pebble_service: PebbleService) -> None:
+    def test_plan_skips_add_layer_when_the_plan_already_has_the_layer(
+        self,
+        layer: dict,
+        mocked_config_file: MagicMock,
+        mocked_container: MagicMock,
+        pebble_service: PebbleService,
+    ) -> None:
+        mocked_container.get_plan.return_value.to_dict.return_value = {
+            "services": {WORKLOAD_SERVICE: {"override": "replace", "command": "kratos serve"}}
+        }
+
+        pebble_service.plan(layer, config_file=ConfigFile("config_file"))
+
+        mocked_container.add_layer.assert_not_called()
+        mocked_container.replan.assert_called_once()
+
+    def test_plan_contains_layer_compares_what_the_layer_sets(
+        self, mocked_container: MagicMock
+    ) -> None:
+        layer = Layer({
+            "services": {
+                WORKLOAD_SERVICE: {
+                    "override": "replace",
+                    "command": "kratos serve",
+                    "environment": {"DEBUG": True},
+                }
+            },
+            "checks": {"up": {"override": "replace", "http": {"url": "http://localhost/health"}}},
+        })
+        mocked_container.get_plan.return_value.to_dict.return_value = {
+            "services": {
+                WORKLOAD_SERVICE: {
+                    "override": "replace",
+                    "command": "kratos serve",
+                    "environment": {"DEBUG": "true"},
+                }
+            },
+            "checks": {
+                "up": {
+                    "override": "replace",
+                    "http": {"url": "http://localhost/health"},
+                    "threshold": 3,
+                }
+            },
+        }
+
+        assert plan_contains_layer(mocked_container, layer)
+        changed = Layer({
+            "services": {WORKLOAD_SERVICE: {"override": "replace", "command": "kratos migrate"}}
+        })
+        assert not plan_contains_layer(mocked_container, changed)
+
+    def test_restart_success(
+        self, mocked_container: MagicMock, pebble_service: PebbleService
+    ) -> None:
         pebble_service.restart(COURIER_SERVICE)
         mocked_container.restart.assert_called_once_with(COURIER_SERVICE)
 
-    def test_restart_failure(self, mocked_container: MagicMock, pebble_service: PebbleService) -> None:
+    def test_restart_failure(
+        self, mocked_container: MagicMock, pebble_service: PebbleService
+    ) -> None:
         mocked_container.restart.side_effect = Exception("restart_error")
 
         with pytest.raises(PebbleServiceError) as exc_info:
@@ -233,11 +284,15 @@ class TestPebbleService:
 
         assert f"Pebble failed to restart the {COURIER_SERVICE} service" in str(exc_info.value)
 
-    def test_stop_success(self, mocked_container: MagicMock, pebble_service: PebbleService) -> None:
+    def test_stop_success(
+        self, mocked_container: MagicMock, pebble_service: PebbleService
+    ) -> None:
         pebble_service.stop(COURIER_SERVICE)
         mocked_container.stop.assert_called_once_with(COURIER_SERVICE)
 
-    def test_stop_failure(self, mocked_container: MagicMock, pebble_service: PebbleService) -> None:
+    def test_stop_failure(
+        self, mocked_container: MagicMock, pebble_service: PebbleService
+    ) -> None:
         mocked_container.stop.side_effect = Exception("stop_error")
 
         with pytest.raises(PebbleServiceError) as exc_info:

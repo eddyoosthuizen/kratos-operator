@@ -47,6 +47,11 @@ requires:
   logging:
     interface: loki_push_api
     optional: true
+  send-log-filters:
+    interface: log_filters
+    optional: true
+    description: |
+      Publishes the rules for filtering the workload's logs to the collector that receives them.
   tracing:
     interface: tracing
     limit: 1
@@ -362,3 +367,5 @@ parts:
     source: .
     build-snaps:
       - astral-uv
+    build-packages:
+      - git

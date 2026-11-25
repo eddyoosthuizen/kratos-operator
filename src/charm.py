@@ -12,6 +12,7 @@ from os.path import join
 from secrets import token_hex
 from typing import Any, Optional
 
+from charmlibs.interfaces.log_filters import LogFiltersRequirer
 from charms.certificate_transfer_interface.v1.certificate_transfer import (
     CertificatesAvailableEvent,
     CertificatesRemovedEvent,
@@ -122,6 +123,7 @@ from constants import (
     INTERNAL_ROUTE_INTEGRATION_NAME,
     KRATOS_ADMIN_PORT,
     KRATOS_EXTERNAL_IDP_INTEGRATOR_INTEGRATION_NAME,
+    LOG_FILTERS_DROP,
     LOGGING_INTEGRATION_NAME,
     LOGIN_UI_INTEGRATION_NAME,
     LOGIN_WEBHOOK_INTEGRATION_NAME,
@@ -130,6 +132,7 @@ from constants import (
     PROMETHEUS_SCRAPE_INTEGRATION_NAME,
     PUBLIC_ROUTE_INTEGRATION_NAME,
     REGISTRATION_WEBHOOK_INTEGRATION_NAME,
+    SEND_LOG_FILTERS_INTEGRATION_NAME,
     TRACING_INTEGRATION_NAME,
     WORKLOAD_CONTAINER,
 )
@@ -297,6 +300,12 @@ class KratosCharm(CharmBase):
             self.on.kratos_pebble_check_recovered, self._on_pebble_check_recovered
         )
         self.framework.observe(self.on.upgrade_charm, self._on_upgrade_charm)
+        self.framework.observe(
+            self.on[SEND_LOG_FILTERS_INTEGRATION_NAME].relation_changed, self._on_config_changed
+        )
+        self.framework.observe(
+            self.on[SEND_LOG_FILTERS_INTEGRATION_NAME].relation_broken, self._on_config_changed
+        )
         self.framework.observe(self.on.update_status, self._on_update_status)
         self.framework.observe(self.on.collect_unit_status, self._on_collect_status)
 
@@ -465,6 +474,10 @@ class KratosCharm(CharmBase):
         return adjust_resource_requirements(limits, requests, adhere_to_requests=True)
 
     def _holistic_handler(self, event: EventBase) -> None:
+        LogFiltersRequirer(
+            self, SEND_LOG_FILTERS_INTEGRATION_NAME, ottl_drop=LOG_FILTERS_DROP
+        ).publish()
+
         if not secrets_is_ready(self):
             self._initialize_secrets()
 
@@ -504,7 +517,9 @@ class KratosCharm(CharmBase):
                 self._pebble_service.stop(COURIER_SERVICE)
             return
 
-        if self._pebble_service.config_changed or not self._workload_service.is_running(COURIER_SERVICE):
+        if self._pebble_service.config_changed or not self._workload_service.is_running(
+            COURIER_SERVICE
+        ):
             logger.info("Restarting kratos courier service")
             self._pebble_service.restart(COURIER_SERVICE)
 
@@ -585,7 +600,11 @@ class KratosCharm(CharmBase):
                 )
             )
 
-        if can_connect and self.unit.is_leader() and self._workload_service.is_failing(COURIER_SERVICE):
+        if (
+            can_connect
+            and self.unit.is_leader()
+            and self._workload_service.is_failing(COURIER_SERVICE)
+        ):
             event.add_status(
                 BlockedStatus(
                     f"Failed to start the courier service, please check the '{COURIER_SERVICE}' logs on the workload container"
