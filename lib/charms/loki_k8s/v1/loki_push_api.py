@@ -2574,15 +2574,34 @@ class _PebbleLogClient:
         return targets
 
     @staticmethod
+    def _built_by_this_library(target: Dict) -> bool:
+        """Whether a log target is one that `_build_log_target` created.
+
+        Every enabled target it builds carries the "product: Juju" label. A target that
+        a charm or another library added, of any type, does not, and is not ours to
+        disable.
+        """
+        return (target.get("labels") or {}).get("product") == "Juju"
+
+    @staticmethod
     def disable_inactive_endpoints(
         container: Container, active_endpoints: Dict[str, str], topology: JujuTopology
     ):
-        """Disable forwarding for inactive endpoints by checking against the Pebble plan."""
+        """Disable forwarding for inactive endpoints by checking against the Pebble plan.
+
+        Only targets this library built are considered. Disabling one that something
+        else added would overwrite it for good: the stub goes in this library's layer,
+        which a charm cannot move ahead of its own.
+        """
         pebble_layer = container.get_plan().to_dict().get("log-targets", None)
         if not pebble_layer:
             return
 
         for unit_name, target in pebble_layer.items():
+            # Not one of ours, whatever its type: leave it alone
+            if not _PebbleLogClient._built_by_this_library(target):
+                continue
+
             # If the layer is a disabled log forwarding endpoint, skip it
             if "-all" in target["services"]:  # pyright: ignore
                 continue

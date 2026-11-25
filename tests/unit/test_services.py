@@ -1,11 +1,12 @@
 # Copyright 2025 Canonical Ltd.
 # See LICENSE file for licensing details.
 
+import copy
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
-from ops import ModelError
+from ops import Container, ModelError
 from ops.pebble import CheckStatus, ServiceStatus
 from pytest_mock import MockerFixture
 from scenario import CheckInfo
@@ -21,7 +22,7 @@ from constants import (
 )
 from env_vars import DEFAULT_CONTAINER_ENV, EnvVarConvertible
 from exceptions import PebbleServiceError
-from services import PebbleService, WorkloadService
+from services import PEBBLE_LAYER_DICT, PebbleService, WorkloadService, plan_contains_layer
 
 
 class TestWorkloadService:
@@ -156,55 +157,52 @@ class TestPebbleService:
         return PebbleService(mocked_unit)
 
     @pytest.fixture
+    def layer(self) -> dict:
+        return {"services": {WORKLOAD_SERVICE: {"override": "replace", "command": "kratos serve"}}}
+
+    @pytest.fixture
     def mocked_config_file(self, mocker: MockerFixture) -> MagicMock:
         mocked = mocker.patch("charm.ConfigFile.from_workload_container")
         mocked.return_value = ConfigFile("config_file")
         return mocked
 
-    @patch("ops.pebble.Layer")
     def test_plan_when_config_files_mismatch(
         self,
-        mocked_layer: MagicMock,
+        layer: dict,
         mocked_config_file: MagicMock,
         mocked_container: MagicMock,
         pebble_service: PebbleService,
     ) -> None:
-        pebble_service.plan(mocked_layer, config_file=ConfigFile("new_config_file"))
+        pebble_service.plan(layer, config_file=ConfigFile("new_config_file"))
 
         assert pebble_service.config_changed is True
 
-        mocked_container.add_layer.assert_called_once_with(
-            WORKLOAD_SERVICE, mocked_layer, combine=True
-        )
+        mocked_container.add_layer.assert_called_once_with(WORKLOAD_SERVICE, layer, combine=True)
         mocked_container.push.assert_called_once_with(
             CONFIG_FILE_PATH, "new_config_file", make_dirs=True
         )
         mocked_container.restart.assert_called_once_with(WORKLOAD_SERVICE)
         mocked_container.replan.assert_not_called()
 
-    @patch("ops.pebble.Layer")
     def test_plan_when_config_files_match(
         self,
-        mocked_layer: MagicMock,
+        layer: dict,
         mocked_config_file: MagicMock,
         mocked_container: MagicMock,
         pebble_service: PebbleService,
     ) -> None:
-        pebble_service.plan(mocked_layer, config_file=ConfigFile("config_file"))
+        pebble_service.plan(layer, config_file=ConfigFile("config_file"))
 
         assert pebble_service.config_changed is False
 
-        mocked_container.add_layer.assert_called_once_with(
-            WORKLOAD_SERVICE, mocked_layer, combine=True
-        )
+        mocked_container.add_layer.assert_called_once_with(WORKLOAD_SERVICE, layer, combine=True)
         mocked_container.push.assert_not_called()
         mocked_container.restart.assert_not_called()
         mocked_container.replan.assert_called_once()
 
-    @patch("ops.pebble.Layer")
     def test_plan_failure(
         self,
-        mocked_layer: MagicMock,
+        layer: dict,
         mocked_config_file: MagicMock,
         mocked_container: MagicMock,
         pebble_service: PebbleService,
@@ -213,13 +211,27 @@ class TestPebbleService:
             patch.object(mocked_container, "replan", side_effect=Exception("plan_error")),
             pytest.raises(PebbleServiceError) as exc_info,
         ):
-            pebble_service.plan(mocked_layer, config_file=ConfigFile("config_file"))
+            pebble_service.plan(layer, config_file=ConfigFile("config_file"))
 
-        mocked_container.add_layer.assert_called_once_with(
-            WORKLOAD_SERVICE, mocked_layer, combine=True
-        )
+        mocked_container.add_layer.assert_called_once_with(WORKLOAD_SERVICE, layer, combine=True)
         assert "Pebble failed to restart the workload service" in str(exc_info.value)
         assert "plan_error" in str(exc_info.value)
+
+    def test_plan_skips_add_layer_when_the_plan_already_has_the_layer(
+        self,
+        layer: dict,
+        mocked_config_file: MagicMock,
+        mocked_container: MagicMock,
+        pebble_service: PebbleService,
+    ) -> None:
+        mocked_container.get_plan.return_value.to_dict.return_value = {
+            "services": {WORKLOAD_SERVICE: {"override": "replace", "command": "kratos serve"}}
+        }
+
+        pebble_service.plan(layer, config_file=ConfigFile("config_file"))
+
+        mocked_container.add_layer.assert_not_called()
+        mocked_container.replan.assert_called_once()
 
     def test_restart_success(self, mocked_container: MagicMock, pebble_service: PebbleService) -> None:
         pebble_service.restart(COURIER_SERVICE)
@@ -265,3 +277,82 @@ class TestPebbleService:
         # Verify both services get the same environment variables
         assert layer_dict["services"][WORKLOAD_SERVICE]["environment"] == expected_env_vars
         assert layer_dict["services"][COURIER_SERVICE]["environment"] == expected_env_vars
+
+
+class TestPlanContainsLayer:
+    @staticmethod
+    def container_with_plan(plan: dict) -> MagicMock:
+        container = MagicMock(spec=Container)
+        container.get_plan.return_value.to_dict.return_value = plan
+        return container
+
+    @staticmethod
+    def kratos_layer() -> dict:
+        """PEBBLE_LAYER_DICT without the environment that render_pebble_layer may write in."""
+        layer = copy.deepcopy(PEBBLE_LAYER_DICT)
+        for service in layer["services"].values():
+            service.pop("environment", None)
+        return layer
+
+    @classmethod
+    def kratos_plan(cls) -> dict:
+        """The plan Pebble reports for the kratos layer: its defaults added, summaries not."""
+        layer = cls.kratos_layer()
+        plan = {"services": layer["services"], "checks": layer["checks"]}
+        for check in plan["checks"].values():
+            check["threshold"] = 3
+        return plan
+
+    def test_true_when_the_plan_holds_the_layer_plus_pebble_defaults(self) -> None:
+        container = self.container_with_plan(self.kratos_plan())
+
+        assert plan_contains_layer(container, self.kratos_layer())
+
+    def test_true_when_environment_values_differ_only_in_type(self) -> None:
+        layer = {
+            "services": {
+                "kratos": {
+                    "override": "replace",
+                    "environment": {"FLAG": False, "LOG_FORMAT": "json", "PORT": 4433},
+                }
+            }
+        }
+        container = self.container_with_plan({
+            "services": {
+                "kratos": {
+                    "override": "replace",
+                    "environment": {"FLAG": "false", "LOG_FORMAT": "json", "PORT": "4433"},
+                }
+            }
+        })
+
+        assert plan_contains_layer(container, layer)
+
+    def test_false_when_a_service_setting_differs(self) -> None:
+        plan = self.kratos_plan()
+        plan["services"][WORKLOAD_SERVICE]["command"] = "kratos serve all --old"
+        container = self.container_with_plan(plan)
+
+        assert not plan_contains_layer(container, self.kratos_layer())
+
+    def test_false_when_the_plan_keeps_an_environment_variable_the_layer_dropped(self) -> None:
+        layer = {"services": {"kratos": {"override": "replace", "environment": {"A": "1"}}}}
+        container = self.container_with_plan({
+            "services": {"kratos": {"override": "replace", "environment": {"A": "1", "B": "2"}}}
+        })
+
+        assert not plan_contains_layer(container, layer)
+
+    def test_false_when_the_plan_lacks_a_service_of_the_layer(self) -> None:
+        plan = self.kratos_plan()
+        del plan["services"][COURIER_SERVICE]
+        container = self.container_with_plan(plan)
+
+        assert not plan_contains_layer(container, self.kratos_layer())
+
+    def test_false_when_a_check_has_lost_its_level(self) -> None:
+        plan = self.kratos_plan()
+        del plan["checks"]["alive"]["level"]
+        container = self.container_with_plan(plan)
+
+        assert not plan_contains_layer(container, self.kratos_layer())

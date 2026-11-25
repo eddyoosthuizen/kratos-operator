@@ -46,6 +46,7 @@ from constants import (
     SECURITY_OTLP_FILTER_SOURCE_PATH,
 )
 from env_vars import EnvVars
+from services import plan_contains_layer
 
 logger = logging.getLogger(__name__)
 
@@ -713,7 +714,8 @@ def configure_security_otlp_log_forwarding(
             "log-targets": targets,
         }
     )
-    container.add_layer("security-otlp-log-forwarding", layer, combine=True)
+    if not plan_contains_layer(container, layer):
+        container.add_layer("security-otlp-log-forwarding", layer, combine=True)
     # add_layer() alone only updates pebble's plan -- it does not start the new
     # "security-otlp-filter" service. replan() is what PebbleService.plan() (services.py)
     # already relies on for the primary service; needed here for the same reason, or the

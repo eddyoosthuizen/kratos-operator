@@ -810,6 +810,24 @@ class TestSecurityOtlpLogForwarding:
         assert f"-service {WORKLOAD_SERVICE}" in filter_service["command"]
         assert filter_service["startup"] == "enabled"
 
+    def test_skips_add_layer_once_the_plan_has_the_forwarding_layer(self) -> None:
+        requirer = self.requirer_with({
+            3: SecurityOtlpEndpoint(protocol="http", endpoint="https://a.example:4319")
+        })
+        first_container = self.container_with_log_targets({})
+        with patch("integrations.SECURITY_OTLP_FILTER_SOURCE_PATH", new=self.filter_binary()):
+            configure_security_otlp_log_forwarding(first_container, requirer, WORKLOAD_SERVICE)
+        _, applied_layer = first_container.add_layer.call_args.args
+
+        second_container = create_autospec(Container, instance=True)
+        second_container.get_plan.return_value.to_dict.return_value = applied_layer.to_dict()
+        with patch("integrations.SECURITY_OTLP_FILTER_SOURCE_PATH", new=self.filter_binary()):
+            configure_security_otlp_log_forwarding(second_container, requirer, WORKLOAD_SERVICE)
+
+        second_container.add_layer.assert_not_called()
+        second_container.push.assert_called_once()
+        second_container.replan.assert_called_once()
+
     def test_disables_targets_of_collectors_no_longer_related(self) -> None:
         container = self.container_with_log_targets({
             "security-otlp-3": {"type": "opentelemetry", "location": "https://a.example:4319"},

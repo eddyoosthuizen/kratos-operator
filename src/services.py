@@ -58,6 +58,43 @@ PEBBLE_LAYER_DICT = {
 }
 
 
+_LAYER_SECTIONS = ("services", "checks", "log-targets")
+# Pebble prints a check's default threshold into the plan even when the layer sets none.
+_PEBBLE_DEFAULTED_KEYS = frozenset({"threshold"})
+
+
+def plan_contains_layer(container: Container, layer: Layer | LayerDict) -> bool:
+    """Report whether the container's plan already holds everything `layer` would set.
+
+    Pebble announces a plan change for every add_layer, even an identical one, and before
+    v1.33 each announcement makes it ship a forwarded service's whole log buffer again.
+    Callers skip add_layer when this returns True. Any difference, or an entry this cannot
+    compare, returns False, which only costs the add_layer that was always made.
+    """
+    layer_dict = (layer if isinstance(layer, Layer) else Layer(layer)).to_dict()
+    plan_dict = container.get_plan().to_dict()
+    for section in _LAYER_SECTIONS:
+        for name, entry in layer_dict.get(section, {}).items():
+            planned_entry = plan_dict.get(section, {}).get(name)
+            if not isinstance(planned_entry, dict):
+                return False
+            expected = {key: value for key, value in entry.items() if key != "override"}
+            if "environment" in expected:
+                # Pebble stores a service's environment as strings, YAML-style for booleans.
+                expected["environment"] = {
+                    key: str(value).lower() if isinstance(value, bool) else str(value)
+                    for key, value in expected["environment"].items()
+                }
+            actual = {
+                key: value
+                for key, value in planned_entry.items()
+                if key != "override" and (key in expected or key not in _PEBBLE_DEFAULTED_KEYS)
+            }
+            if actual != expected:
+                return False
+    return True
+
+
 class WorkloadService:
     """Workload service abstraction running in a Juju unit."""
 
@@ -147,7 +184,8 @@ class PebbleService:
         self.config_changed = False
 
     def plan(self, layer: Layer, config_file: ConfigFile) -> None:
-        self._container.add_layer(WORKLOAD_SERVICE, layer, combine=True)
+        if not plan_contains_layer(self._container, layer):
+            self._container.add_layer(WORKLOAD_SERVICE, layer, combine=True)
         current_config_file = ConfigFile.from_workload_container(self._container)
         self.config_changed = config_file != current_config_file
 
